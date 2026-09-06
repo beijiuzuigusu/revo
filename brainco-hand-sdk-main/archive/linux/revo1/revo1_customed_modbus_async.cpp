@@ -1,0 +1,114 @@
+#include "stark-sdk.h"
+#include "stark_common.h"
+#include <stdio.h>
+#include <unistd.h>
+
+// Function declarations
+void print_hex(unsigned char *data, int len);
+int modbus_operation_async(const uint8_t *values, int len,
+                           ModbusOperationResultCallback callback,
+                           void *user_data);
+void get_device_info(DeviceHandler *handle, uint8_t slave_id);
+
+struct {
+  DeviceHandler *handle;
+  uint8_t slave_id;
+} set_modbus_operation_params;
+
+int main(int argc, char const *argv[]) {
+  // Setup signal handlers for crash debugging
+  setup_signal_handlers();
+
+  auto cfg = auto_detect_modbus_revo1(NULL, true);
+  if (cfg == NULL) {
+    fprintf(stderr, "Failed to auto-detect Modbus device configuration.\n");
+    return -1;
+  }
+
+  auto handle = modbus_open(cfg->port_name, cfg->baudrate);
+  uint8_t slave_id = cfg->slave_id;
+  get_device_info(handle, slave_id);
+  if (cfg != NULL)
+    free_device_config(cfg);
+
+  set_modbus_operation_callback(modbus_operation_async);
+  while (true) {
+    printf("Performing periodic operations...\n");
+    // Simulate some operations
+    usleep(1000 * 1000); // Execute once per second
+  }
+  return 0;
+}
+
+// Thread execution function
+void *get_device_info_thread(void *arg) {
+  auto params = static_cast<decltype(set_modbus_operation_params) *>(arg);
+  DeviceHandler *modbus_handle = params->handle;
+  uint8_t slave_id = params->slave_id;
+
+  uint32_t baudrate = stark_get_rs485_baudrate(modbus_handle, slave_id);
+  printf("Slave[%hhu] Baudrate: %d\n", slave_id, baudrate);
+
+  auto voltage = stark_get_voltage(modbus_handle, slave_id);
+  printf("Slave[%hhu] Voltage: %.2fV\n", slave_id, voltage / 1000.0);
+
+  free(arg); // Free parameter memory
+  pthread_exit(NULL);
+  return NULL;
+}
+
+void get_device_info(DeviceHandler *handler, uint8_t slave_id) {
+  if (!handler) {
+    fprintf(stderr, "Invalid Modbus handle.\n");
+    return;
+  }
+  printf("Getting device info for slave ID: %hhu\n", slave_id);
+
+  // Create thread
+  pthread_t thread_id;
+  auto params = new decltype(set_modbus_operation_params);
+  if (!params) {
+    fprintf(stderr, "Failed to allocate memory for thread parameters.\n");
+    return;
+  }
+  params->handle = handler;
+  params->slave_id = slave_id;
+  int result = pthread_create(&thread_id, NULL, get_device_info_thread, params);
+  if (result != 0) {
+    fprintf(stderr, "Failed to create thread: %d\n", result);
+    return;
+  }
+  // Detach thread so it runs in the background
+  pthread_detach(thread_id);
+
+  printf("Async get_device_info thread started.\n");
+}
+
+int modbus_operation_async(const uint8_t *values, int len,
+                           ModbusOperationResultCallback callback,
+                           void *user_data) {
+  if (len <= 0 || !values || !callback) {
+    fprintf(stderr, "Invalid parameters for modbus_operation_async.\n");
+    return -1;
+  }
+  printf("modbus_operation_async called, len=%d, data: ", len);
+  print_hex((unsigned char *)values, len);
+
+  // TODO: Implement the actual Modbus operation here
+  // ...
+
+  return 0;
+}
+
+// Function to print a byte array in hexadecimal
+void print_hex(unsigned char *data, int len) {
+  for (int i = 0; i < len; i++) {
+    printf("0x%02X", data[i]); // Print each byte as 2-digit hex
+    if (i < len - 1) {
+      printf(" "); // Add space between bytes, except for the last one
+    }
+  }
+  printf("\r\n"); // Newline after the hex output
+}
+
+// Signal handler is now provided by stark_common.cpp

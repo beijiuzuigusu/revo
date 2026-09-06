@@ -1,0 +1,9 @@
+# Stark SDK Installation:
+# 1. To install from internal OSS (recommended for pre-release): run `bash install_whl.sh`
+# 2. To install from public PyPI: uncomment the line below (if commented out)
+# bc-stark-sdk==2.0.1
+asyncio>=3.4.3
+colorlog>=6.9.0
+torch>=1.9.0,<2.0.0
+numpy>=1.21.0,<2.0.0
+scikit-learn>=1.3.0,<1.5.0

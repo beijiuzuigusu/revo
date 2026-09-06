@@ -1,0 +1,491 @@
+import asyncio
+import sys
+import platform
+from can_utils import *
+
+# Import the corresponding ZLG CAN driver module according to the operating system
+if platform.system() == "Windows":
+    from zlg_win import *
+elif platform.system() == "Linux":
+    from zlg_linux import *
+else:
+    raise NotImplementedError(f"Unsupported operating system: {platform.system()}")
+
+
+class Revo1CanController:
+    """
+    Revo1 CAN communication controller with multi-frame support
+    
+    Implements proper multi-frame handling for:
+    - MultiRead (0x0B): Firmware version, serial number, etc.
+    - TouchSensorRead (0x0D): Touch sensor data (Revo1AdvancedTouch)
+    
+    Multi-frame formats:
+    - MultiRead: [addr, len|flag, data...] - bit 7 of len is last frame flag
+    - TouchSensorRead: [total:4bit|seq:4bit, data...]
+    """
+
+    def __init__(self, master_id: int = 1, slave_id: int = 1):
+        self.master_id = master_id
+        self.slave_id = slave_id
+        self.client = None  # Will be initialized in initialize()
+
+    async def initialize(self):
+        """Initialize CAN connection"""
+        try:
+            # Initialize ZLG CAN device
+            zlgcan_open()
+
+            # Set callback functions
+            libstark.set_can_tx_callback(self._can_send)
+            libstark.set_can_rx_callback(self._can_read)
+
+            # Initialize device handler for CAN protocol
+            self.client = libstark.init_device_handler(libstark.StarkProtocolType.Can, self.master_id)
+
+            logger.info(
+                f"CAN connection initialized successfully - Master ID: {self.master_id}, Slave ID: {self.slave_id}"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"CAN connection initialization failed: {e}")
+            return False
+
+    def _can_send(self, _slave_id: int, can_id: int, data: list) -> bool:
+        """CAN message sending"""
+        try:
+            if not zlgcan_send_message(can_id, bytes(data)):
+                logger.error("CAN message sending failed")
+                return False
+            return True
+        except Exception as e:
+            logger.error(f"CAN message sending failed: {e}")
+            return False
+
+    def _can_read(self, _slave_id: int, expected_can_id: int, expected_frames: int) -> tuple:
+        """
+        CAN message receiving with multi-frame support
+        
+        SDK tells us how many frames to expect via expected_frames parameter.
+        We need to collect all frames and return concatenated data.
+        Filters frames by expected_can_id to handle interleaved responses.
+        
+        Args:
+            _slave_id: Slave ID (not used)
+            expected_can_id: Expected CAN ID (used for filtering)
+            expected_frames: Expected frame count (0 = single frame, >0 = multi-frame)
+            
+        Returns:
+            tuple: (can_id, data)
+        """
+        try:
+            all_data = []
+            received_count = 0
+            target_frames = expected_frames if expected_frames > 0 else 1
+            max_attempts = 30 if expected_frames > 1 else 10
+            
+            for attempt in range(max_attempts):
+                # Use raw receive to get all frames and filter by CAN ID
+                recv_msg = zlgcan_receive_filtered(expected_can_id)
+                if recv_msg is None:
+                    import time
+                    wait_ms = 0.005 if attempt < 5 else 0.010
+                    time.sleep(wait_ms)
+                    continue
+                
+                can_id, data, frames_in_batch = recv_msg
+                
+                all_data.extend(data)
+                received_count += frames_in_batch
+                
+                # Check if we have enough frames
+                if received_count >= target_frames:
+                    return expected_can_id, bytes(all_data)
+                
+                # For single frame request, return immediately
+                if expected_frames <= 1:
+                    return can_id, bytes(data)
+            
+            # Timeout - return whatever we have
+            if all_data:
+                return expected_can_id, bytes(all_data)
+            
+            return 0, bytes([])
+
+        except Exception as e:
+            logger.error(f"CAN message receiving failed: {e}")
+            return 0, bytes([])
+
+    async def get_device_info(self):
+        """Get device information"""
+        try:
+            device_info = await self.client.get_device_info(self.slave_id)
+            logger.info(f"Device information: {device_info.description}")
+            self.device_info = device_info  # Store device info
+            return device_info
+        except Exception as e:
+            logger.error(f"Failed to get device information: {e}")
+            return None
+
+    def uses_revo1_touch_api(self) -> bool:
+        """Check if device uses Revo1 Touch API"""
+        if self.device_info is None:
+            return False
+        return self.device_info.uses_revo1_touch_api()
+
+    async def change_slave_id(self, new_slave_id: int):
+        """Modify device slave ID (cautious use, device will restart)"""
+        try:
+            await self.client.set_slave_id(self.slave_id, new_slave_id)
+            logger.info(f"Slave ID modified to {new_slave_id}, device will restart...")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to modify slave ID: {e}")
+            return False
+
+    async def configure_device(self):
+        """Configure device parameters"""
+        try:
+            # Option: Modify slave ID (if needed, uncomment and set new ID)
+            # WARNING: Device will restart, program will exit
+            # if await self.change_slave_id(new_slave_id=2):
+            #     sys.exit(0)
+
+            # Disable auto calibration and perform manual calibration
+            # await self.client.set_auto_calibration(self.slave_id, False) # Disable auto calibration on boot
+            # await self.client.calibrate_position(self.slave_id)
+            # await self.client.set_auto_calibration(self.slave_id, True)  # Enable auto calibration on boot
+            # auto_calibration_enabled = await self.client.get_auto_calibration_enabled(self.slave_id)
+            # logger.info(f"Auto calibration enabled: {auto_calibration_enabled}")
+
+            # Configure: Turbo mode (optional, uncomment to enable)
+            # await self.configure_turbo_mode()
+
+            return True
+        except Exception as e:
+            logger.error(f"Failed to configure device: {e}")
+            return False
+
+    async def configure_turbo_mode(self):
+        """Configure Turbo mode"""
+        try:
+            # Enable Turbo mode
+            await self.client.set_turbo_mode_enabled(self.slave_id, True)
+
+            # Set Turbo parameters
+            turbo_interval = 200  # Grasp interval time (milliseconds)
+            turbo_duration = 300  # Grasp duration time (milliseconds)
+            turbo_conf = libstark.TurboConfig(turbo_interval, turbo_duration)
+            await self.client.set_turbo_config(self.slave_id, turbo_conf)
+
+            # Verify configuration
+            turbo_mode_enabled = await self.client.get_turbo_mode_enabled(self.slave_id)
+            turbo_config = await self.client.get_turbo_config(self.slave_id)
+
+            logger.info(f"Turbo mode: {turbo_mode_enabled}")
+            logger.info(
+                f"Turbo configuration - Interval: {turbo_config.interval}ms, Duration: {turbo_config.duration}ms"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to configure Turbo mode: {e}")
+
+    async def finger_position_examples(self):
+        """Finger position control example"""
+        logger.info("=== Finger position control example ===")
+
+        # Example 1: Each finger grip
+        logger.info("Example 1: Each finger grip")
+        positions = [
+            [200, 0, 0, 0, 0, 0],  # Thumb
+            [200, 300, 0, 0, 0, 0],  # Thumb + Index finger
+            [200, 300, 500, 0, 0, 0],  # + Middle finger
+            [200, 300, 500, 700, 0, 0],  # + Ring finger
+            [200, 300, 500, 700, 800, 0],  # + Little finger
+            [200, 300, 500, 700, 800, 900],  # + Wrist
+        ]
+
+        for i, pos in enumerate(positions):
+            logger.info(f"Step {i+1}: {pos}")
+            await self.client.set_finger_positions(self.slave_id, pos)
+            await asyncio.sleep(0.8)
+
+        await asyncio.sleep(1.0)
+
+        # Example 2: Predefined gesture
+        logger.info("Example 2: Predefined gestures")
+        gestures = {
+            "Open hand": [0, 0, 0, 0, 0, 0],
+            "Point": [0, 300, 0, 0, 0, 0],
+            "Victory gesture": [0, 300, 800, 0, 0, 0],
+            "OK gesture": [500, 300, 800, 0, 0, 0],  # Thumb limited to 500 (2 joints)
+            "Grip": [500, 300, 1000, 1000, 1000, 1000],  # Thumb limited to 500 (2 joints)
+        }
+
+        for gesture_name, positions in gestures.items():
+            logger.info(f"Execute gesture: {gesture_name} - {positions}")
+            await self.client.set_finger_positions(self.slave_id, positions)
+            await asyncio.sleep(1.5)
+
+        # Example 3: Grasp action simulation
+        logger.info("Example 3: Grasp action simulation")
+        grab_sequence = [
+            ([0, 0, 0, 0, 0, 0], "Initial position"),
+            ([300, 400, 600, 800, 800, 0], "Grasp preparation"),
+            ([600, 700, 900, 1000, 1000, 0], "Grasp completion"),
+        ]
+
+        for positions, description in grab_sequence:
+            logger.info(f"{description}: {positions}")
+            await self.client.set_finger_positions(self.slave_id, positions)
+            await asyncio.sleep(1.0)
+
+    async def finger_speed_examples(self):
+        """Finger speed control example"""
+        logger.info("=== Finger speed control example ===")
+
+        # Stop all movement
+        await self.client.set_finger_speeds(self.slave_id, [0] * 6)
+        logger.info("All fingers stopped movement")
+
+    async def single_finger_control_example(self, finger_id: libstark.FingerId):
+        """Single finger control example"""
+        logger.info(f"=== Single finger control example - {finger_id} ===")
+
+        # Position control
+        logger.info("Position control test")
+        await self.client.set_finger_position(self.slave_id, finger_id, 1000)  # Maximum position
+        await asyncio.sleep(1.0)
+        await self.client.set_finger_position(self.slave_id, finger_id, 0)  # Initial position
+        await asyncio.sleep(1.0)
+
+        # Speed control
+        logger.info("Speed control test")
+        await self.client.set_finger_speed(
+            self.slave_id, finger_id, 1000
+        )  # Maximum speed
+        await asyncio.sleep(1.0)
+        await self.client.set_finger_speed(
+            self.slave_id, finger_id, -1000
+        )  # Maximum speed
+        await asyncio.sleep(1.0)
+        await self.client.set_finger_speed(self.slave_id, finger_id, 0)  # Stop
+
+    async def get_motor_status(self) -> libstark.MotorStatusData:
+        """Get motor status"""
+        try:
+            status = await self.client.get_motor_status(self.slave_id)
+            # Optional: Enable detailed status logging
+            # logger.info(f"Motor status: {status.description}")
+            return status
+        except Exception as e:
+            logger.error(f"Failed to get motor status: {e}")
+            return None  # type: ignore
+
+    async def monitor_motor_status(self, interval: float = 0.001):
+        """Continuous monitoring of motor status"""
+        logger.info(f"Start monitoring motor status of device {self.slave_id:02x}")
+
+        while True:
+            try:
+                await self.get_motor_status()
+                await asyncio.sleep(interval)
+            except asyncio.CancelledError:
+                logger.info("Motor status monitoring cancelled")
+                break
+            except Exception as e:
+                logger.error(f"Motor status monitoring exception: {e}")
+                await asyncio.sleep(1)
+
+    async def test_touch_sensor_control(self):
+        """Test touch sensor control (Revo1AdvancedTouch)"""
+        logger.info("=== Test touch sensor control ===")
+
+        try:
+            # 1. Enable touch sensors for all fingers
+            logger.info("1. Enable touch sensors for all fingers...")
+            await self.client.touch_sensor_setup(self.slave_id, 0xFF)
+            await asyncio.sleep(0.5)
+
+            # # 2. Calibrate touch sensors
+            # logger.info("2. Calibrate touch sensors for all fingers...")
+            # await self.client.touch_sensor_calibrate(self.slave_id, 0xFF)
+            # await asyncio.sleep(2.0)
+
+            # # 3. Reset touch sensors
+            # logger.info("3. Reset touch sensors for all fingers...")
+            # await self.client.touch_sensor_reset(self.slave_id, 0xFF)
+            # await asyncio.sleep(0.5)
+
+            logger.info("Touch sensor control test completed\n")
+        except Exception as e:
+            logger.error(f"Touch sensor control test failed: {e}")
+
+    def print_finger_touch_data(self, finger, channel: int, finger_name: str):
+        """Print touch data for a single finger"""
+        logger.info(f"\n--- {finger_name} (Channel {channel}) ---")
+
+        # Display different data groups based on finger type
+        if channel == 0:
+            # Thumb: 2 force groups, 1 self-proximity
+            logger.info(f"  Force Group 1: Normal={finger.normal_force1}, Tangential={finger.tangential_force1}, Direction={finger.tangential_direction1}°")
+            logger.info(f"  Force Group 2: Normal={finger.normal_force2}, Tangential={finger.tangential_force2}, Direction={finger.tangential_direction2}°")
+            logger.info(f"  Self-proximity: {finger.self_proximity1}")
+        elif channel in [1, 2, 3]:
+            # Index/Middle/Ring: 3 force groups, 2 self-proximity, 1 mutual-proximity
+            logger.info(f"  Force Group 1: Normal={finger.normal_force1}, Tangential={finger.tangential_force1}, Direction={finger.tangential_direction1}°")
+            logger.info(f"  Force Group 2: Normal={finger.normal_force2}, Tangential={finger.tangential_force2}, Direction={finger.tangential_direction2}°")
+            logger.info(f"  Force Group 3: Normal={finger.normal_force3}, Tangential={finger.tangential_force3}, Direction={finger.tangential_direction3}°")
+            logger.info(f"  Self-proximity 1: {finger.self_proximity1}, Self-proximity 2: {finger.self_proximity2}")
+            logger.info(f"  Mutual-proximity: {finger.mutual_proximity}")
+        elif channel == 4:
+            # Pinky: 2 force groups, 1 self-proximity, NO mutual-proximity
+            logger.info(f"  Force Group 1: Normal={finger.normal_force1}, Tangential={finger.tangential_force1}, Direction={finger.tangential_direction1}°")
+            logger.info(f"  Force Group 2: Normal={finger.normal_force2}, Tangential={finger.tangential_force2}, Direction={finger.tangential_direction2}°")
+            logger.info(f"  Self-proximity: {finger.self_proximity1}")
+
+        # Display status
+        status_map = {0: "Normal", 1: "Data Error", 2: "Communication Error"}
+        status_str = status_map.get(finger.status, "Unknown")
+        logger.info(f"  Status: {finger.status} ({status_str})")
+
+    async def test_touch_sensor_reading(self):
+        """Test touch sensor data reading (Revo1AdvancedTouch)"""
+        logger.info("\n=== Test touch sensor data reading ===")
+
+        try:
+            touch_data = await self.client.get_touch_sensor_status(self.slave_id)
+            logger.info(f"Successfully read touch data for {len(touch_data)} fingers")
+
+            finger_names = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+
+            for i, finger in enumerate(touch_data):
+                if i < len(finger_names):
+                    self.print_finger_touch_data(finger, i, finger_names[i])
+
+            logger.info("\nTouch sensor data reading test completed\n")
+        except Exception as e:
+            logger.error(f"Touch sensor data reading failed: {e}")
+
+    async def monitor_touch_sensor(self, iterations: int = 10, interval: float = 0.5):
+        """Periodic touch sensor data monitoring (Revo1AdvancedTouch)"""
+        logger.info(f"\n=== Periodic touch sensor monitoring ({iterations} iterations) ===")
+
+        finger_names = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+
+        for i in range(iterations):
+            try:
+                touch_data = await self.client.get_touch_sensor_status(self.slave_id)
+
+                logger.info(f"\n[{i + 1}] Touch data snapshot:")
+                for idx, finger in enumerate(touch_data):
+                    if idx < len(finger_names):
+                        logger.info(
+                            f"  {finger_names[idx]}: Normal={finger.normal_force1:4}, "
+                            f"Tangential={finger.tangential_force1:4}, "
+                            f"Self-prox={finger.self_proximity1:8}, Status={finger.status}"
+                        )
+
+                await asyncio.sleep(interval)
+            except Exception as e:
+                logger.error(f"[{i + 1}] Reading failed: {e}")
+
+        logger.info("\nPeriodic monitoring completed\n")
+
+    async def demo_task(self):
+        """Demo task"""
+        # Get device information first
+        await self.get_device_info()
+        
+        # Configure device parameters, enable as needed
+        # await self.configure_device()
+
+        if self.uses_revo1_touch_api():
+            logger.info("Detected Revo1 Touch device, running touch sensor demos...")
+            await self.test_touch_sensor_control()
+            await self.test_touch_sensor_reading()
+            await self.monitor_touch_sensor(iterations=1000, interval=0.5)
+        else:
+            # Enable the following demos for other devices
+            await self.finger_position_examples()
+            await asyncio.sleep(1.0)
+
+            await self.finger_speed_examples()
+            await asyncio.sleep(1.0)
+
+            await self.single_finger_control_example(libstark.FingerId.Pinky)
+
+            # Set the final gesture (packing gesture)
+            # await self.client.set_finger_positions(
+            #     self.slave_id, [800, 300, 1000, 1000, 1000, 1000]
+            # )
+
+    def cleanup(self):
+        """Clean up resources"""
+        try:
+            zlgcan_close()
+            logger.info("CAN connection closed")
+        except Exception as e:
+            logger.error(f"Error cleaning up resources: {e}")
+
+    async def close(self):
+        """Async close method for compatibility"""
+        self.cleanup()
+
+
+async def main():
+    """Main function"""
+    # NOTE: Run auto_detect.py first to find actual device ID.
+    # Revo1 devices typically use slave_id=2, while Revo2 devices use slave_id=1.
+    controller = Revo1CanController(master_id=1, slave_id=2)
+
+    try:
+        # Initialize connection
+        if not await controller.initialize():
+            logger.error("Initialization failed, program exiting")
+            return
+
+        # Set shutdown event listener
+        shutdown_event = setup_shutdown_event(logger)
+
+        # Create tasks
+        tasks = []
+
+        # Start demo task
+        demo_task = asyncio.create_task(controller.demo_task())
+        tasks.append(demo_task)
+
+        # Optional: Start motor status monitoring
+        monitor_task = asyncio.create_task(controller.monitor_motor_status())
+        tasks.append(monitor_task)
+
+        # Wait for shutdown signal
+        await shutdown_event.wait()
+        logger.info("Received shutdown signal, stopping all tasks...")
+
+        # Cancel all tasks
+        for task in tasks:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    except Exception as e:
+        logger.error(f"Program execution exception: {e}")
+
+    finally:
+        controller.cleanup()
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("User interrupted")
+        sys.exit(0)
+    except Exception as e:
+        logger.error(f"Error: {e}", exc_info=True)
+        sys.exit(1)

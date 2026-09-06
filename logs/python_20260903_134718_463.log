@@ -1,0 +1,17 @@
+2026-09-03T13:47:18.466537Z[INFO][src\python\py_mod.rs:24] bc_stark_sdk version: 2.0.3
+2026-09-03T13:47:18.468021Z[INFO][src\utils\logging_desktop.rs:17] bc_stark_sdk version: 2.0.3
+2026-09-03T13:47:22.256649Z[INFO][src\modbus\device_ctx.rs:1022] Found device at baudrate Baud460800, slave_id: 0x7F
+2026-09-03T13:47:22.257147Z[INFO][src\modbus\device_ctx.rs:1024] Device SN: "BCXTR2108J2600001", hw_type: Revo2Touch
+2026-09-03T13:47:22.263620Z[INFO][src\modbus\device_ctx.rs:1031] Device FW Version: "1.0.22.U"
+2026-09-03T13:47:22.533836Z[INFO][src\python\py_device.rs:84] Set hardware type for slave 127: Revo2Basic
+2026-09-03T13:47:22.534833Z[INFO][d:\vscode_s\codex\revo\brainco-hand-sdk-main\python\revo2\revo2_utils.py:75] Preset hardware type to StarkHardwareType.Revo2Basic for Revo2 Modbus open
+2026-09-03T13:47:22.535829Z[INFO][src\stark\api\device_info.rs:33] slave[127] get_device_info...
+2026-09-03T13:47:22.609798Z[INFO][src\stark\api\device_info.rs:163] TouchVendor for slave 127: Capacitive
+2026-09-03T13:47:22.627870Z[INFO][src\stark\api\device_info.rs:189] DeviceInfo: "{\"sku_type\":\"MediumRight\",\"hand_type\":\"Right\",\"hardware_type\":\"Revo2Touch\",\"serial_number\":\"BCXTR2108J2600001\",\"firmware_version\":\"1.0.22.U\",\"hardware_version\":\"\"}"
+2026-09-03T13:47:22.627870Z[INFO][d:\vscode_s\codex\revo\brainco-hand-sdk-main\python\revo2\revo2_utils.py:81] Device info: DeviceInfo { sku_type: MediumRight, hand_type: Right, hardware_type: Revo2Touch, serial_number: BCXTR2108J2600001, firmware_version: 1.0.22.U, hardware_version:  }
+2026-09-03T13:47:22.628867Z[INFO][d:\vscode_s\codex\revo\brainco-hand-sdk-main\python\revo2\revo2_utils.py:85] Touch hand
+2026-09-03T13:47:22.628867Z[INFO][src\stark\api\device_info.rs:33] slave[127] get_device_info...
+2026-09-03T13:47:22.674548Z[INFO][src\stark\api\device_info.rs:163] TouchVendor for slave 127: Capacitive
+2026-09-03T13:47:22.691073Z[INFO][src\stark\api\device_info.rs:189] DeviceInfo: "{\"sku_type\":\"MediumRight\",\"hand_type\":\"Right\",\"hardware_type\":\"Revo2Touch\",\"serial_number\":\"BCXTR2108J2600001\",\"firmware_version\":\"1.0.22.U\",\"hardware_version\":\"\"}"
+2026-09-03T13:47:22.706625Z[INFO][src\stark\api\motor_config.rs:44] set_finger_unit_mode, slave_id: 127, mode: Normalized
+2026-09-03T13:47:33.428083Z[INFO][src\stark\api\motor_config.rs:44] set_finger_unit_mode, slave_id: 127, mode: Normalized
